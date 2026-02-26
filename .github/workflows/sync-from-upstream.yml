@@ -1,0 +1,108 @@
+name: Sync from upstream working-paper branch
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mirror repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: '1.8.27'
+
+      - name: Clone upstream repo
+        run: |
+          git clone --depth 1 --branch working-paper https://github.com/valentinklotzbuecher/llm-uj-research-eval.git upstream
+
+      - name: Install dependencies
+        run: |
+          cd upstream
+          pip install -r requirements.txt || pip install pyyaml pandas numpy
+
+      - name: Add embed-resources to quarto config
+        run: |
+          cd upstream
+          sed -i 's/format:/format:\n  html:\n    embed-resources: true/' _quarto.yml || true
+          # More reliable: use Python to insert
+          python3 << 'PYEOF'
+          import re
+          with open('_quarto.yml', 'r') as f:
+              content = f.read()
+          if 'embed-resources: true' not in content:
+              content = re.sub(r'(format:\s*\n\s*html:)', r'\1\n    embed-resources: true', content)
+              with open('_quarto.yml', 'w') as f:
+                  f.write(content)
+          PYEOF
+
+      - name: Render Quarto book
+        run: |
+          cd upstream
+          quarto render --to html || echo "Render completed with warnings"
+
+      - name: Copy HTML files
+        run: |
+          cp upstream/_book/*.html . 2>/dev/null || true
+          cp upstream/_book/search.json . 2>/dev/null || true
+
+      - name: Add banner to HTML files
+        run: |
+          cat << 'BANNER' > banner.html
+          <div style="background: linear-gradient(135deg, #2D9D5E 0%, #1a7a42 100%); color: white; padding: 16px 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; position: sticky; top: 0; z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+            <div style="max-width: 1200px; margin: 0 auto;">
+              <strong style="font-size: 1.1em;">Mirror for Annotation</strong>
+              <span style="margin-left: 12px; opacity: 0.95;">This is an HTML mirror of the working paper for Hypothes.is annotation.</span>
+              <div style="margin-top: 8px; font-size: 0.95em;">
+                <a href="https://github.com/valentinklotzbuecher/llm-uj-research-eval/raw/working-paper/_book/Just-Ask-the-Model--One-Shot-LLM-Research-Evaluation-and-Structured-Expert-Review.pdf" style="color: #fff; text-decoration: underline; margin-right: 20px;">PDF Version</a>
+                <a href="https://llm-uj-research-eval.netlify.app/" style="color: #fff; text-decoration: underline; margin-right: 20px;">Main Project Site</a>
+                <a href="https://github.com/valentinklotzbuecher/llm-uj-research-eval/tree/working-paper" style="color: #fff; text-decoration: underline;">Source Repository</a>
+              </div>
+            </div>
+          </div>
+          BANNER
+          
+          python3 << 'PYEOF'
+          import re
+          import glob
+          
+          banner = open('banner.html').read()
+          
+          for htmlfile in glob.glob('*.html'):
+              if htmlfile == 'banner.html':
+                  continue
+              try:
+                  content = open(htmlfile).read()
+                  if 'Mirror for Annotation' not in content:
+                      content = re.sub(r'(<body[^>]*>)', r'\1\n' + banner, content, count=1)
+                      open(htmlfile, 'w').write(content)
+                      print(f"Updated {htmlfile}")
+              except Exception as e:
+                  print(f"Error with {htmlfile}: {e}")
+          PYEOF
+          rm banner.html
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Sync from upstream working-paper branch $(date -u +%Y-%m-%d)"
+            git push
+          fi
