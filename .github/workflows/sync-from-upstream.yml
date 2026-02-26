@@ -93,6 +93,21 @@ jobs:
           PYEOF
           rm banner.html
 
+      - name: Add Hypothes.is embed
+        run: |
+          python3 << 'PYEOF'
+          import glob
+
+          hypothesis_script = '<script src="https://hypothes.is/embed.js" async></script>'
+
+          for htmlfile in glob.glob('*.html'):
+              content = open(htmlfile).read()
+              if 'hypothes.is/embed.js' not in content:
+                  content = content.replace('</head>', hypothesis_script + '\n</head>')
+                  open(htmlfile, 'w').write(content)
+                  print(f"Added Hypothesis to {htmlfile}")
+          PYEOF
+
       - name: Commit and push if changed
         run: |
           git config user.name "GitHub Actions Bot"
